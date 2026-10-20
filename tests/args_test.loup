@@ -1,64 +1,62 @@
 @mode(host.dual)
 
 from debug.assert import (expect, expectEq);
-from cli.args import (parse_args, DEFAULT_GREETING);
+from cli.args import (parse_args, forfiles_switches, DEFAULT_MASK, DEFAULT_COMMAND);
 
-func test_no_arguments(): void {
+func test_defaults(): void {
     let none: list[string] = [];
     let opts = parse_args(none).unwrap();
-    expectEq(opts.command, "", "no command");
-    expectEq(opts.operands.len(), 0, "no operands");
-    expectEq(opts.greeting, DEFAULT_GREETING, "default greeting");
-    expect(!opts.help and !opts.version and !opts.verbose and !opts.shout, "no flags set");
+    expectEq(opts.path, "", "current directory");
+    expectEq(opts.mask, DEFAULT_MASK, "mask *");
+    expectEq(opts.command, DEFAULT_COMMAND, "cmd /c echo @file");
+    expect(!opts.recurse and !opts.help and !opts.version, "no flags");
 }
 
-func test_command_and_operands(): void {
-    let opts = parse_args(["hello", "Ann"]).unwrap();
-    expectEq(opts.command, "hello", "command");
-    expectEq(opts.operands.len(), 1, "one operand");
-    expectEq(opts.operands[0], "Ann", "operand");
+func test_declared_switches(): void {
+    expectEq(forfiles_switches().len(), 5, "P M S C D");
 }
 
-func test_flags_anywhere(): void {
-    let opts = parse_args(["-v", "hello", "--shout", "Ann"]).unwrap();
-    expect(opts.verbose, "verbose");
-    expect(opts.shout, "shout");
-    expectEq(opts.command, "hello", "command");
-    expectEq(opts.operands[0], "Ann", "operand");
+func test_values_next_argument_or_colon(): void {
+    let opts = parse_args(["/P", "sub\\dir", "/m:*.txt", "-s", "/C", "cmd /c echo @path"]).unwrap();
+    expectEq(opts.path, "sub\\dir", "/P value");
+    expectEq(opts.mask, "*.txt", "/m:value");
+    expect(opts.recurse, "-s");
+    expectEq(opts.command, "cmd /c echo @path", "/C value");
+}
+
+func test_linux_path_value(): void {
+    let opts = parse_args(["/p", "/tmp/x"]).unwrap();
+    expectEq(opts.path, "/tmp/x", "a /x value is a value");
 }
 
 func test_help_and_version(): void {
+    expect(parse_args(["/?"]).unwrap().help, "/?");
+    expect(parse_args(["/s", "-?"]).unwrap().help, "-? with a switch");
     expect(parse_args(["--help"]).unwrap().help, "--help");
-    expect(parse_args(["-h"]).unwrap().help, "-h");
     expect(parse_args(["--version"]).unwrap().version, "--version");
-    expect(parse_args(["-V"]).unwrap().version, "-V");
-}
-
-func test_value_option_forms(): void {
-    expectEq(parse_args(["-g", "Hi"]).unwrap().greeting, "Hi", "-g VALUE");
-    expectEq(parse_args(["--greeting", "Hi"]).unwrap().greeting, "Hi", "--greeting VALUE");
-    expectEq(parse_args(["--greeting=a=b"]).unwrap().greeting, "a=b", "--greeting=VALUE keeps '='");
-}
-
-func test_double_dash_ends_options(): void {
-    let opts = parse_args(["hello", "--", "--shout"]).unwrap();
-    expect(!opts.shout, "--shout after -- is an operand");
-    expectEq(opts.operands[0], "--shout", "operand");
-}
-
-func test_lone_dash_is_operand(): void {
-    let opts = parse_args(["hello", "-"]).unwrap();
-    expectEq(opts.operands[0], "-", "operand");
-}
-
-func test_unknown_option(): void {
-    expectEq(parse_args(["--nope"]).unwrap_err(), "unknown option '--nope'", "error message");
 }
 
 func test_missing_value(): void {
-    expectEq(parse_args(["-g"]).unwrap_err(), "option '-g' requires a value", "error message");
+    expectEq(parse_args(["/p"]).unwrap_err(),
+        "ERROR: Invalid syntax. Value expected for '/p'.\nType \"FORFILES /?\" for usage.", "/p");
+    expectEq(parse_args(["/M", "/S"]).unwrap_err(),
+        "ERROR: Invalid syntax. Value expected for '/M'.\nType \"FORFILES /?\" for usage.", "/M /S");
 }
 
-func test_flag_with_value(): void {
-    expectEq(parse_args(["--shout=1"]).unwrap_err(), "option '--shout' does not take a value", "error message");
+func test_repeated_switch(): void {
+    expectEq(parse_args(["/s", "/m", "a", "/S"]).unwrap_err(),
+        "ERROR: Invalid syntax. '/S' option is not allowed more than '1' time(s).\nType \"FORFILES /?\" for usage.",
+        "/S twice");
+}
+
+func test_operand_is_an_error(): void {
+    expectEq(parse_args(["/s", "foo"]).unwrap_err(),
+        "ERROR: Invalid argument/option - 'foo'.\nType \"FORFILES /?\" for usage.", "operand");
+    expectEq(parse_args(["/x"]).unwrap_err(),
+        "ERROR: Invalid argument/option - '/x'.\nType \"FORFILES /?\" for usage.", "unknown switch");
+}
+
+func test_date_switch_refused(): void {
+    expectEq(parse_args(["/D", "-30"]).unwrap_err(),
+        "ERROR: Invalid argument/option - '/D'.\nType \"FORFILES /?\" for usage.", "/D");
 }

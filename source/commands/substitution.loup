@@ -1,0 +1,181 @@
+@mode(host.dual)
+
+# The /C command template: `0xHH` escapes and the @ variables.
+#
+# forfiles first replaces every `0xHH` in the command with the character of
+# that code (`0x09` is a tab, `0x22` a double quote), once, then for each
+# selected entry replaces the variables:
+#
+#   @file     "a.txt"           the name, quoted
+#   @fname    "a"               the name without its extension, quoted
+#   @ext      "txt"             the extension without the dot, quoted ("" if none)
+#   @path     "/abs/dir/a.txt"  the absolute path, quoted
+#   @relpath  "./sub/a.txt"     the path from the start directory, quoted
+#   @isdir    TRUE / FALSE
+#   @fsize    1234              the size in bytes (0 for a directory)
+#
+# Names are matched without regard to case (`@FILE`). @path and @relpath use
+# `/`: the values are handed to Linux programs (Windows uses `\`).
+
+from io.fs import (readBytes);
+from win.paths import (join_path);
+
+# One selected directory entry.
+pub struct Entry {
+    pub rel_dir: string;   # fs form, relative to the start directory; "" for the start directory itself
+    pub name: string;
+    pub is_dir: bool;
+}
+
+# (Entries are built here only: a struct literal in another module gets a
+# different field layout in native builds.)
+pub func make_entry(rel_dir: string, name: string, is_dir: bool): Entry {
+    return Entry(rel_dir = rel_dir, name = name, is_dir = is_dir);
+}
+
+func chars_of(text: string): list[string] {
+    var out: list[string] = [];
+    for (ch in text) {
+        out.push(ch);
+    }
+    return out;
+}
+
+func hex_digit(ch: string): int {
+    return "0123456789abcdef".index_of(ch.toLowerCase());
+}
+
+# The command with every `0xHH` (`0x` or `0X`, two hexadecimal digits)
+# replaced by the character with that code. `0x00` stays as typed (a command
+# line cannot hold NUL); codes above 0x7F give the Unicode character U+00HH.
+pub func expand_hex(text: string): string {
+    let cs = chars_of(text);
+    let n = cs.len();
+    var out: list[string] = [];
+    var i = 0;
+    while (i < n) {
+        if (cs[i] == "0" and i + 3 < n and (cs[i + 1] == "x" or cs[i + 1] == "X")) {
+            let hi = hex_digit(cs[i + 2]);
+            let lo = hex_digit(cs[i + 3]);
+            let code = hi * 16 + lo;
+            if (hi >= 0 and lo >= 0 and code > 0) {
+                out.push(str(char.of(code)));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(cs[i]);
+        i += 1;
+    }
+    return out.join("");
+}
+
+# The position of the last `.` in a name, or -1.
+func last_dot(name: string): int {
+    var i = name.len() - 1;
+    while (i >= 0) {
+        if (name.slice(i, i + 1) == ".") {
+            return i;
+        }
+        i -= 1;
+    }
+    return -1;
+}
+
+# `a.tar.gz` → `a.tar`; `README` → `README`; `.profile` → ``.
+pub func name_stem(name: string): string {
+    let dot = last_dot(name);
+    if (dot < 0) {
+        return name;
+    }
+    return name.slice(0, dot);
+}
+
+# `a.tar.gz` → `gz`; `README` → ``; `.profile` → `profile`.
+pub func name_ext(name: string): string {
+    let dot = last_dot(name);
+    if (dot < 0) {
+        return "";
+    }
+    return name.slice(dot + 1);
+}
+
+func quoted(text: string): string {
+    return "\"" + text + "\"";
+}
+
+# The variable names, longest first where one could shadow another.
+const VAR_NAMES: string = "relpath fname fsize isdir file path ext";
+
+# The size of a file in bytes, read from its contents (Loup 1.26.0 has no
+# stat()).
+func file_size(path: string): int {
+    return readBytes(path).len();
+}
+
+# The value of one variable (lower-case name, without `@`) for an entry
+# under the absolute start directory `start_abs`.
+pub func variable_value(var_name: string, entry: Entry, start_abs: string): string {
+    if (var_name == "file") {
+        return quoted(entry.name);
+    }
+    if (var_name == "fname") {
+        return quoted(name_stem(entry.name));
+    }
+    if (var_name == "ext") {
+        return quoted(name_ext(entry.name));
+    }
+    if (var_name == "path") {
+        return quoted(join_path(join_path(start_abs, entry.rel_dir), entry.name));
+    }
+    if (var_name == "relpath") {
+        return quoted("./" + join_path(entry.rel_dir, entry.name));
+    }
+    if (var_name == "isdir") {
+        if (entry.is_dir) {
+            return "TRUE";
+        }
+        return "FALSE";
+    }
+    if (var_name == "fsize") {
+        if (entry.is_dir) {
+            return "0";
+        }
+        let full = join_path(join_path(start_abs, entry.rel_dir), entry.name);
+        return str(file_size(full));
+    }
+    return "@" + var_name;
+}
+
+# The command with every @ variable replaced for one entry.
+pub func substitute(command: string, entry: Entry, start_abs: string): string {
+    let names = VAR_NAMES.split(" ");
+    let lower = command.toLowerCase();
+    let n = command.len();
+    var out: list[string] = [];
+    var plain = 0;   # start of the text not yet copied
+    var i = 0;
+    while (i < n) {
+        if (command.slice(i, i + 1) != "@") {
+            i += 1;
+            continue;
+        }
+        var found = "";
+        for (name in names) {
+            let end = i + 1 + name.len();
+            if (found.len() == 0 and end <= n and lower.slice(i + 1, end) == name) {
+                found = name;
+            }
+        }
+        if (found.len() == 0) {
+            i += 1;
+            continue;
+        }
+        out.push(command.slice(plain, i));
+        out.push(variable_value(found, entry, start_abs));
+        i += 1 + found.len();
+        plain = i;
+    }
+    out.push(command.slice(plain, n));
+    return out.join("");
+}

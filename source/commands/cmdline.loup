@@ -1,0 +1,462 @@
+@mode(host.dual)
+
+# Turning a forfiles command into a script for /bin/sh.
+#
+# On Windows, forfiles starts the command as a program; cmd.exe built-ins
+# such as `echo` need `cmd /c` in front (the default command is
+# `cmd /c echo @file`). Here:
+#
+# - `cmd /c LINE` (also `cmd.exe`, `/k`, other cmd switches before `/c`, any
+#   case): LINE is cmd syntax and is translated to sh by cmd_to_sh().
+# - anything else: the line is split into arguments the way a Windows
+#   program splits its command line (split_args()) and the program runs
+#   directly (exec_line()).
+#
+# The cmd subset: `echo` (text printed literally, quotes included; `ECHO is
+# on.` when empty; `echo.` an empty line); `&` (one command after another),
+# `&&`, `||`, `|`; redirections `>`, `>>`, `<`, `2>`, `2>&1`, with `nul` as
+# /dev/null; `( ... )` groups; `^` escapes the next character; `"..."`
+# quotes; `%NAME%` is the environment variable if it is set. Every other
+# character is literal: sh never sees `$`, `*` or `'` unescaped.
+
+func chars_of(text: string): list[string] {
+    var out: list[string] = [];
+    for (ch in text) {
+        out.push(ch);
+    }
+    return out;
+}
+
+func is_space(ch: string): bool {
+    return ch == " " or ch == "\t";
+}
+
+func is_operator(ch: string): bool {
+    return ch == "&" or ch == "|" or ch == "<" or ch == ">";
+}
+
+func is_digit(ch: string): bool {
+    return ch.len() == 1 and "0123456789".index_of(ch) >= 0;
+}
+
+# The text as one sh word, in single quotes.
+pub func sh_quote(text: string): string {
+    return "'" + text.replace("'", "'\\''") + "'";
+}
+
+const SH_PLAIN: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.,/:@+";
+
+# One literal character for sh: as is when sh gives it no meaning, else
+# escaped.
+pub func sh_char(ch: string): string {
+    if (ch.byteLength() > 1 or SH_PLAIN.index_of(ch) >= 0) {
+        return ch;
+    }
+    if (ch == "\n") {
+        return "'\n'";
+    }
+    return "\\" + ch;
+}
+
+func sh_literal(text: string): string {
+    var out: list[string] = [];
+    for (ch in text) {
+        out.push(sh_char(ch));
+    }
+    return out.join("");
+}
+
+# ---- cmd /c detection ---------------------------------------------------
+
+# The index just after the first word of `cs` from `start` (up to a space).
+func word_end(cs: list[string], start: int): int {
+    var i = start;
+    while (i < cs.len() and !is_space(cs[i])) {
+        i += 1;
+    }
+    return i;
+}
+
+func skip_spaces(cs: list[string], start: int): int {
+    var i = start;
+    while (i < cs.len() and is_space(cs[i])) {
+        i += 1;
+    }
+    return i;
+}
+
+func join_range(cs: list[string], start: int, end: int): string {
+    var out: list[string] = [];
+    for (k in start..end) {
+        out.push(cs[k]);
+    }
+    return out.join("");
+}
+
+# Where the cmd command line starts in `line` if `line` is `cmd ... /c LINE`,
+# else -1.
+func cmd_body_start(line: string): int {
+    let cs = chars_of(line);
+    var i = skip_spaces(cs, 0);
+    var end = word_end(cs, i);
+    let program = join_range(cs, i, end).toLowerCase();
+    if (program != "cmd" and program != "cmd.exe") {
+        return -1;
+    }
+    i = skip_spaces(cs, end);
+    while (i < cs.len()) {
+        end = word_end(cs, i);
+        let sw = join_range(cs, i, end).toLowerCase();
+        if (sw == "/c" or sw == "/k") {
+            return skip_spaces(cs, end);
+        }
+        if (!sw.startsWith("/")) {
+            return -1;
+        }
+        i = skip_spaces(cs, end);
+    }
+    return -1;
+}
+
+# Whether the command is `cmd /c ...` (translated from cmd syntax).
+pub func is_cmd_line(line: string): bool {
+    return cmd_body_start(line) >= 0;
+}
+
+# The part of a `cmd /c` command after `/c`.
+pub func cmd_body(line: string): string {
+    let start = cmd_body_start(line);
+    if (start < 0) {
+        return "";
+    }
+    let cs = chars_of(line);
+    return join_range(cs, start, cs.len());
+}
+
+# ---- cmd syntax to sh ---------------------------------------------------
+
+# `%NAME%` at `i`: the index after the closing `%` when NAME is a set
+# environment variable, else -1.
+func env_ref_end(cs: list[string], i: int): int {
+    var j = i + 1;
+    while (j < cs.len() and cs[j] != "%") {
+        j += 1;
+    }
+    if (j >= cs.len() or j == i + 1) {
+        return -1;
+    }
+    let value = env(join_range(cs, i + 1, j));
+    if (value.is_none()) {
+        return -1;
+    }
+    return j + 1;
+}
+
+func env_value(cs: list[string], i: int, end: int): string {
+    return env(join_range(cs, i + 1, end - 1)) ?? "";
+}
+
+# Text with `%NAME%` replaced by set environment variables.
+pub func expand_env(text: string): string {
+    let cs = chars_of(text);
+    var out: list[string] = [];
+    var i = 0;
+    while (i < cs.len()) {
+        if (cs[i] == "%") {
+            let end = env_ref_end(cs, i);
+            if (end > 0) {
+                out.push(env_value(cs, i, end));
+                i = end;
+                continue;
+            }
+        }
+        out.push(cs[i]);
+        i += 1;
+    }
+    return out.join("");
+}
+
+# If an `echo` command starts at `i`, the index after the word `echo`, else -1.
+func echo_end(cs: list[string], i: int): int {
+    if (i + 4 > cs.len() or join_range(cs, i, i + 4).toLowerCase() != "echo") {
+        return -1;
+    }
+    if (i + 4 == cs.len()) {
+        return i + 4;
+    }
+    let next = cs[i + 4];
+    if (is_space(next) or is_operator(next) or " .:;,=(/+[]".index_of(next) >= 0) {
+        return i + 4;
+    }
+    return -1;
+}
+
+# The end of echo's text from `start`: the first operator outside quotes
+# (`)` too, inside a group), not counting `^`-escaped characters. A digit
+# just before `>` or `<` is a handle number, not text (cmd's own rule).
+func echo_text_end(cs: list[string], start: int, depth: int): int {
+    var i = start;
+    var quoted = false;
+    while (i < cs.len()) {
+        let ch = cs[i];
+        if (ch == "\"") {
+            quoted = !quoted;
+        } else if (!quoted and ch == "^") {
+            i += 1;
+        } else if (!quoted and (is_operator(ch) or (ch == ")" and depth > 0))) {
+            if ((ch == ">" or ch == "<") and i > start and is_digit(cs[i - 1])) {
+                return i - 1;
+            }
+            return i;
+        }
+        i += 1;
+    }
+    return cs.len();
+}
+
+# echo's text between `start` and `end`, carets removed outside quotes and
+# environment variables expanded.
+func echo_text(cs: list[string], start: int, end: int): string {
+    var out: list[string] = [];
+    var i = start;
+    var quoted = false;
+    while (i < end) {
+        let ch = cs[i];
+        if (ch == "\"") {
+            quoted = !quoted;
+        } else if (!quoted and ch == "^") {
+            i += 1;
+            if (i < end) {
+                out.push(cs[i]);
+            }
+            i += 1;
+            continue;
+        }
+        out.push(ch);
+        i += 1;
+    }
+    return expand_env(out.join(""));
+}
+
+# The sh command that prints what cmd's `echo` prints for this text.
+pub func echo_command(delimiter: string, text: string): string {
+    let spaced = delimiter.len() == 0 or is_space(delimiter);
+    let word = text.trim().toLowerCase();
+    if (spaced and word.len() == 0) {
+        return "printf '%s\\n' 'ECHO is on.'";
+    }
+    if (spaced and (word == "on" or word == "off")) {
+        return ":";
+    }
+    return "printf '%s\\n' " + sh_quote(text);
+}
+
+# The end of a quoted region that starts at `i` (the index of the closing
+# quote, or the end of the line).
+func quote_end(cs: list[string], i: int): int {
+    var j = i + 1;
+    while (j < cs.len() and cs[j] != "\"") {
+        j += 1;
+    }
+    return j;
+}
+
+# The end of a redirection target that starts at `i`.
+func target_end(cs: list[string], i: int, depth: int): int {
+    if (i < cs.len() and cs[i] == "\"") {
+        return quote_end(cs, i) + 1;
+    }
+    var j = i;
+    while (j < cs.len() and !is_space(cs[j]) and !is_operator(cs[j]) and !(cs[j] == ")" and depth > 0)) {
+        if (cs[j] == "^") {
+            j += 1;
+        }
+        j += 1;
+    }
+    return if (j > cs.len()) { cs.len() } else { j };
+}
+
+# A redirection target for sh: `nul` becomes /dev/null.
+func target_word(cs: list[string], start: int, end: int): string {
+    var out: list[string] = [];
+    var i = start;
+    while (i < end) {
+        let ch = cs[i];
+        if (ch == "^" and i + 1 < end) {
+            out.push(cs[i + 1]);
+            i += 2;
+            continue;
+        }
+        if (ch != "\"") {
+            out.push(ch);
+        }
+        i += 1;
+    }
+    let target = expand_env(out.join(""));
+    if (target.toLowerCase() == "nul") {
+        return "/dev/null";
+    }
+    if (target.len() == 0) {
+        return "";
+    }
+    return sh_quote(target);
+}
+
+# Translates a cmd command line (the part after `cmd /c`) into sh.
+pub func cmd_to_sh(line: string): string {
+    let cs = chars_of(line);
+    let n = cs.len();
+    var out: list[string] = [];
+    var i = 0;
+    var at_start = true;
+    var depth = 0;
+    while (i < n) {
+        let ch = cs[i];
+        if (at_start) {
+            if (is_space(ch)) {
+                out.push(ch);
+                i += 1;
+                continue;
+            }
+            if (ch == "@") {
+                i += 1;
+                continue;
+            }
+            if (ch == "(") {
+                out.push("( ");
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            at_start = false;
+            let e = echo_end(cs, i);
+            if (e >= 0) {
+                var delimiter = "";
+                var start = e;
+                if (e < n and !is_operator(cs[e])) {
+                    delimiter = cs[e];
+                    start = e + 1;
+                }
+                let end = echo_text_end(cs, start, depth);
+                out.push(echo_command(delimiter, echo_text(cs, start, end)));
+                out.push(" ");
+                i = end;
+                continue;
+            }
+        }
+        if (ch == "\"") {
+            let close = quote_end(cs, i);
+            out.push(sh_quote(expand_env(join_range(cs, i + 1, close))));
+            i = close + 1;
+            continue;
+        }
+        if (ch == "^") {
+            if (i + 1 < n) {
+                out.push(sh_char(cs[i + 1]));
+            }
+            i += 2;
+            continue;
+        }
+        if (ch == "&" or ch == "|") {
+            if (i + 1 < n and cs[i + 1] == ch) {
+                out.push(ch + ch);
+                i += 2;
+            } else {
+                out.push(if (ch == "&") { ";" } else { "|" });
+                i += 1;
+            }
+            at_start = true;
+            continue;
+        }
+        if (ch == ">" or ch == "<") {
+            var op = ch;
+            i += 1;
+            if (ch == ">" and i < n and cs[i] == ">") {
+                op = ">>";
+                i += 1;
+            }
+            if (i + 1 < n and cs[i] == "&" and is_digit(cs[i + 1])) {
+                out.push(op + "&" + cs[i + 1]);
+                i += 2;
+                continue;
+            }
+            let start = skip_spaces(cs, i);
+            let end = target_end(cs, start, depth);
+            out.push(op + target_word(cs, start, end));
+            i = end;
+            continue;
+        }
+        if (ch == ")" and depth > 0) {
+            out.push(" )");
+            depth -= 1;
+            i += 1;
+            continue;
+        }
+        if (ch == "%") {
+            let end = env_ref_end(cs, i);
+            if (end > 0) {
+                out.push(sh_literal(env_value(cs, i, end)));
+                i = end;
+                continue;
+            }
+        }
+        if (is_space(ch)) {
+            out.push(ch);
+        } else {
+            out.push(sh_char(ch));
+        }
+        i += 1;
+    }
+    return out.join("");
+}
+
+# ---- programs run directly ----------------------------------------------
+
+# Splits a command line into arguments as a Windows program does (the
+# common case of its rules): spaces separate, double quotes group and are
+# removed, `\"` is a literal quote.
+pub func split_args(line: string): list[string] {
+    let cs = chars_of(line);
+    var args: list[string] = [];
+    var current: list[string] = [];
+    var started = false;
+    var quoted = false;
+    var i = 0;
+    while (i < cs.len()) {
+        let ch = cs[i];
+        if (ch == "\\" and i + 1 < cs.len() and cs[i + 1] == "\"") {
+            current.push("\"");
+            started = true;
+            i += 2;
+            continue;
+        }
+        if (ch == "\"") {
+            quoted = !quoted;
+            started = true;
+        } else if (is_space(ch) and !quoted) {
+            if (started) {
+                args.push(current.join(""));
+                current = [];
+                started = false;
+            }
+        } else {
+            current.push(ch);
+            started = true;
+        }
+        i += 1;
+    }
+    if (started) {
+        args.push(current.join(""));
+    }
+    return args;
+}
+
+# The sh line that runs these arguments as a program, without a shell
+# interpreting them.
+pub func exec_line(args: list[string]): string {
+    var words: list[string] = [];
+    for (a in args) {
+        words.push(sh_quote(a));
+    }
+    return "exec " + words.join(" ");
+}

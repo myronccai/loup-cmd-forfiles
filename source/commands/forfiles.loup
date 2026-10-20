@@ -1,0 +1,140 @@
+@mode(host.dual)
+
+# forfiles: selects the entries of a directory (and with /S of every
+# directory below it) whose names match a mask, and runs a command for each
+# one with @file, @path, ... replaced (see commands/substitution.loup). The
+# command runs through /bin/sh in the entry's directory; `cmd /c` commands
+# are translated from cmd syntax first (see commands/cmdline.loup).
+
+from appinfo import (EXIT_OK, EXIT_FAILURE);
+from cli.args import (Options);
+from io.fs import (isDir, isFile);
+from win.messages import (MSG_FILE_NOT_FOUND, MSG_DIR_NAME_INVALID);
+from win.paths import (fs_path, join_path, strip_trailing_separators);
+from win.wildcard import (MATCH_ALL, MAX_DEPTH, list_matches, subdirectories);
+from commands.substitution import (Entry, make_entry, expand_hex, substitute);
+from commands.cmdline import (is_cmd_line, cmd_body, cmd_to_sh, split_args, exec_line, sh_quote);
+
+pub const MSG_NO_FILES: string = "ERROR: No files found with the specified search criteria.";
+
+# The start directory in fs form: `.` when /P is not given.
+pub func start_dir(path: string): string {
+    if (path.len() == 0) {
+        return ".";
+    }
+    return strip_trailing_separators(fs_path(path));
+}
+
+# Why the start directory cannot be searched, or "" when it can.
+pub func start_error(dir: string): string {
+    if (isDir(dir)) {
+        return "";
+    }
+    if (isFile(dir)) {
+        return "ERROR: " + MSG_DIR_NAME_INVALID;
+    }
+    return "ERROR: " + MSG_FILE_NOT_FOUND;
+}
+
+# The entries under `start` whose names match `mask`, files and directories
+# alike, in forfiles order: a directory's own matches (NTFS name order),
+# then, with `recurse`, each subdirectory in name order, depth first.
+pub func select_entries(start: string, mask: string, recurse: bool): list[Entry] {
+    var out: list[Entry] = [];
+    var stack: list[string] = [""];
+    var depths: list[int] = [0];
+    while (stack.len() > 0) {
+        let rel = stack.pop();
+        let depth = depths.pop();
+        let full = if (rel.len() == 0) { start } else { join_path(start, rel) };
+        for (name in list_matches(full, mask, MATCH_ALL)) {
+            out.push(make_entry(rel, name, isDir(join_path(full, name))));
+        }
+        if (recurse and depth < MAX_DEPTH) {
+            let subs = subdirectories(full);
+            var k = subs.len() - 1;
+            while (k >= 0) {
+                stack.push(join_path(rel, subs[k]));
+                depths.push(depth + 1);
+                k -= 1;
+            }
+        }
+    }
+    return out;
+}
+
+# The absolute form of a directory, as the shell sees it after `cd`. (Loup
+# 1.26.0 has no getcwd(); the ProcResult is read here, in the function that
+# ran it, which native builds require.)
+pub func absolute_dir(dir: string): string {
+    let r = exec(["sh", "-c", "cd -- \"$1\" && pwd", "sh", dir]);
+    let out = r.stdout.to_string();
+    if (r.exit_code != 0 or out.len() < 2) {
+        return dir;
+    }
+    return out.slice(0, out.len() - 1);
+}
+
+# Whether `program` can be started from directory `dir`: a name with a `/`
+# names a file; otherwise it is looked up on PATH.
+pub func find_program(program: string, dir: string): bool {
+    if (program.index_of("/") >= 0) {
+        if (program.startsWith("/")) {
+            return isFile(program);
+        }
+        return isFile(join_path(dir, program));
+    }
+    for (p in (env("PATH") ?? "").split(":")) {
+        let base = if (p.len() == 0) { dir } else { p };
+        if (isFile(join_path(base, program))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+# The sh script that runs one (already substituted) command in `dir`, or ""
+# when the program of a direct command cannot be found.
+pub func shell_script(line: string, dir: string): string {
+    let cd = "cd -- " + sh_quote(dir) + " || exit 1\n";
+    if (is_cmd_line(line)) {
+        return cd + cmd_to_sh(cmd_body(line));
+    }
+    let args = split_args(line);
+    if (args.len() == 0) {
+        return cd + ":";
+    }
+    if (!find_program(args[0], dir)) {
+        return "";
+    }
+    return cd + exec_line(args);
+}
+
+pub func run_forfiles(opts: Options): int {
+    let start = start_dir(opts.path);
+    let problem = start_error(start);
+    if (problem.len() > 0) {
+        printErr(problem);
+        return EXIT_FAILURE;
+    }
+    let entries = select_entries(start, opts.mask, opts.recurse);
+    if (entries.len() == 0) {
+        printErr(MSG_NO_FILES);
+        return EXIT_FAILURE;
+    }
+    let start_abs = absolute_dir(start);
+    let command = expand_hex(opts.command);
+    # Windows' forfiles writes one empty line before the first command.
+    println("");
+    for (entry in entries) {
+        let line = substitute(command, entry, start_abs);
+        let dir = if (entry.rel_dir.len() == 0) { start_abs } else { join_path(start_abs, entry.rel_dir) };
+        let script = shell_script(line, dir);
+        if (script.len() == 0) {
+            printErr("ERROR: " + MSG_FILE_NOT_FOUND);
+            return EXIT_FAILURE;
+        }
+        execShell(script);
+    }
+    return EXIT_OK;
+}

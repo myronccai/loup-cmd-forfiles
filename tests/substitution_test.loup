@@ -1,0 +1,49 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.substitution import (make_entry, expand_hex, name_stem, name_ext, substitute,
+    variable_value);
+
+func test_hex_escapes(): void {
+    expectEq(expand_hex("a0x09b"), "a\tb", "tab");
+    expectEq(expand_hex("0x22@file0x22"), "\"@file\"", "quotes");
+    expectEq(expand_hex("0X41 0x4a"), "A J", "either case");
+    expectEq(expand_hex("0x00 0xZZ 0x4"), "0x00 0xZZ 0x4", "not escapes");
+    expectEq(expand_hex("x0x3D0x3d"), "x==", "back to back");
+}
+
+func test_name_parts(): void {
+    expectEq(name_stem("a.tar.gz"), "a.tar", "stem");
+    expectEq(name_ext("a.tar.gz"), "gz", "ext");
+    expectEq(name_stem("README"), "README", "no extension");
+    expectEq(name_ext("README"), "", "no extension");
+    expectEq(name_stem(".profile"), "", "dot file stem");
+    expectEq(name_ext(".profile"), "profile", "dot file ext");
+    expectEq(name_ext("x."), "", "trailing dot");
+}
+
+func test_variables_of_a_file(): void {
+    let e = make_entry("sub/deep", "my file.txt", false);
+    expectEq(variable_value("file", e, "/w"), "\"my file.txt\"", "@file");
+    expectEq(variable_value("fname", e, "/w"), "\"my file\"", "@fname");
+    expectEq(variable_value("ext", e, "/w"), "\"txt\"", "@ext");
+    expectEq(variable_value("path", e, "/w"), "\"/w/sub/deep/my file.txt\"", "@path");
+    expectEq(variable_value("relpath", e, "/w"), "\"./sub/deep/my file.txt\"", "@relpath");
+    expectEq(variable_value("isdir", e, "/w"), "FALSE", "@isdir");
+}
+
+func test_variables_of_a_directory(): void {
+    let e = make_entry("", "sub", true);
+    expectEq(variable_value("relpath", e, "/"), "\"./sub\"", "@relpath");
+    expectEq(variable_value("path", e, "/"), "\"/sub\"", "@path at the root");
+    expectEq(variable_value("isdir", e, "/"), "TRUE", "@isdir");
+    expectEq(variable_value("fsize", e, "/"), "0", "@fsize of a directory");
+}
+
+func test_substitute(): void {
+    let e = make_entry("", "a.txt", false);
+    expectEq(substitute("cmd /c echo @file", e, "/w"), "cmd /c echo \"a.txt\"", "default command");
+    expectEq(substitute("@FNAME.@Ext @isdir", e, "/w"), "\"a\".\"txt\" FALSE", "any case");
+    expectEq(substitute("mail@x @ @fdate @files", e, "/w"), "mail@x @ @fdate \"a.txt\"s", "others left alone");
+    expectEq(substitute("@relpath@path", e, "/w"), "\"./a.txt\"\"/w/a.txt\"", "adjacent");
+}

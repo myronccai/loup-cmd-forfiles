@@ -1,0 +1,65 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.cmdline import (sh_quote, sh_char, is_cmd_line, cmd_body, cmd_to_sh, echo_command,
+    split_args, exec_line, expand_env);
+
+func test_sh_quote(): void {
+    expectEq(sh_quote("a b"), "'a b'", "plain");
+    expectEq(sh_quote("it's"), "'it'\\''s'", "single quote");
+    expectEq(sh_char("a"), "a", "letter");
+    expectEq(sh_char("$"), "\\$", "dollar");
+    expectEq(sh_char("é"), "é", "non-ASCII");
+}
+
+func test_cmd_detection(): void {
+    expect(is_cmd_line("cmd /c echo @file"), "cmd /c");
+    expect(is_cmd_line("  CMD.EXE /Q /C dir"), "cmd.exe with switches");
+    expect(is_cmd_line("cmd /k echo"), "/k");
+    expect(!is_cmd_line("cmd"), "cmd alone");
+    expect(!is_cmd_line("cmdx /c echo"), "another program");
+    expect(!is_cmd_line("echo cmd /c"), "not first");
+    expectEq(cmd_body("cmd /c   echo  a "), "echo  a ", "body");
+}
+
+func test_echo(): void {
+    expectEq(cmd_to_sh("echo \"a.txt\""), "printf '%s\\n' '\"a.txt\"' ", "quotes kept");
+    expectEq(cmd_to_sh("echo  two  spaces "), "printf '%s\\n' ' two  spaces ' ", "one delimiter dropped");
+    expectEq(cmd_to_sh("echo"), "printf '%s\\n' 'ECHO is on.' ", "no text");
+    expectEq(cmd_to_sh("echo."), "printf '%s\\n' '' ", "echo.");
+    expectEq(cmd_to_sh("@echo off"), ": ", "echo off");
+    expectEq(cmd_to_sh("ECHO $x 'y' a^&b"), "printf '%s\\n' '$x '\\''y'\\'' a&b' ", "literal text");
+    expectEq(echo_command(" ", "  "), "printf '%s\\n' 'ECHO is on.'", "blank text");
+}
+
+func test_operators(): void {
+    expectEq(cmd_to_sh("echo a&echo b"), "printf '%s\\n' 'a' ;printf '%s\\n' 'b' ", "&");
+    expectEq(cmd_to_sh("echo a && echo b || echo c"),
+        "printf '%s\\n' 'a ' && printf '%s\\n' 'b ' || printf '%s\\n' 'c' ", "&& ||");
+    expectEq(cmd_to_sh("echo x> out.txt"), "printf '%s\\n' 'x' >'out.txt'", "redirect");
+    expectEq(cmd_to_sh("echo x >>\"my log\""), "printf '%s\\n' 'x ' >>'my log'", ">> quoted target");
+    expectEq(cmd_to_sh("echo x 2>nul"), "printf '%s\\n' 'x ' 2>/dev/null", "handle and nul");
+    expectEq(cmd_to_sh("echo x2>NUL"), "printf '%s\\n' 'x' 2>/dev/null", "digit before > is a handle");
+    expectEq(cmd_to_sh("sort < in.txt | more"), "sort <'in.txt' | more", "< and |");
+    expectEq(cmd_to_sh("ls 2>&1"), "ls 2>&1", "2>&1");
+    expectEq(cmd_to_sh("(echo a & echo b) > x"), "( printf '%s\\n' 'a ' ; printf '%s\\n' 'b'  ) >'x'", "group");
+}
+
+func test_literal_words(): void {
+    expectEq(cmd_to_sh("cat \"my file.txt\" $HOME *.c"), "cat 'my file.txt' \\$HOME \\*.c", "quoting");
+    expectEq(cmd_to_sh("cat a^ b"), "cat a\\ b", "caret");
+    expectEq(cmd_to_sh("wc it's"), "wc it\\'s", "apostrophe");
+}
+
+func test_environment_variables(): void {
+    let home = env("HOME") ?? "";
+    expectEq(expand_env("%HOME%/x"), home + "/x", "set variable");
+    expectEq(expand_env("%LOUP_FORFILES_UNSET% 100%"), "%LOUP_FORFILES_UNSET% 100%", "unset left alone");
+}
+
+func test_split_args(): void {
+    expectEq(split_args("cat  \"my file.txt\" b").join("|"), "cat|my file.txt|b", "quotes group");
+    expectEq(split_args("printf \\\"x\\\" \"\"").join("|"), "printf|\"x\"|", "escaped quote, empty");
+    expectEq(split_args("   ").len(), 0, "nothing");
+    expectEq(exec_line(["cat", "a'b", "$x"]), "exec 'cat' 'a'\\''b' '$x'", "exec line");
+}

@@ -1,28 +1,32 @@
 @mode(host.dual)
 
-from appinfo import (APP_NAME, APP_VERSION, APP_SUMMARY);
-from cli.args import (DEFAULT_GREETING);
+from appinfo import (APP_NAME, APP_VERSION);
 
+# The text of `forfiles /?` (this project's own wording).
 pub func usage(): string {
     let lines = [
-        i"usage: {$ APP_NAME $} [OPTIONS] COMMAND [ARGS...]",
+        "Runs a command for each file or folder that matches a mask.",
         "",
-        APP_SUMMARY,
+        "FORFILES [/P path] [/M mask] [/S] [/C command]",
         "",
-        "Commands:",
-        "  hello [NAME]          Print a greeting (NAME defaults to 'world')",
-        "  help                  Show this help",
+        "  /P path     Folder to search (default: the current folder).",
+        "  /M mask     Names to select, with * and ? (default: *).",
+        "  /S          Search subfolders too.",
+        "  /C command  Command to run for each match (default:",
+        "              \"cmd /c echo @file\"). It runs in the match's folder.",
         "",
-        "Options:",
-        i"  -g, --greeting TEXT   Greeting used by 'hello' (default: {$ DEFAULT_GREETING $})",
-        "      --shout           Print the greeting in upper case",
-        "  -v, --verbose         Print diagnostic messages to stderr",
-        "  -h, --help            Show this help and exit",
-        "  -V, --version         Show the version and exit",
+        "Variables in the command:",
+        "  @file @fname @ext   name, name without extension, extension (quoted)",
+        "  @path @relpath      absolute path, path from the start folder (quoted)",
+        "  @isdir @fsize       TRUE or FALSE, size in bytes",
+        "  0xHH                the character with hexadecimal code HH",
+        "",
+        "A command that starts with \"cmd /c\" is read as a cmd.exe line and run",
+        "by sh; any other command names a program on PATH.",
     ];
     return lines.join("\n");
 }
 
 pub func version_line(): string {
-    return i"{$ APP_NAME $} {$ APP_VERSION $}";
+    return i"{$ APP_NAME $} (loup-cmd-{$ APP_NAME $}) {$ APP_VERSION $}";
 }

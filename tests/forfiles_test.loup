@@ -1,0 +1,71 @@
+@mode(host.dual)
+
+# select_entries and the start-directory checks, on a tree under build/tmp.
+
+from debug.assert import (expect, expectEq);
+from io.fs import (createDir, writeText, removeDir, isDir);
+from commands.substitution import (Entry);
+from commands.forfiles import (start_dir, start_error, select_entries, find_program, shell_script,
+    MSG_NO_FILES);
+
+const ROOT: string = "build/tmp/forfiles_test";
+
+func make_tree(): void {
+    if (isDir(ROOT)) {
+        removeDir(ROOT);
+    }
+    createDir(ROOT);
+    createDir(ROOT + "/sub");
+    createDir(ROOT + "/sub/deep");
+    createDir(ROOT + "/Zed");
+    writeText(ROOT + "/b.txt", "b");
+    writeText(ROOT + "/A.TXT", "a");
+    writeText(ROOT + "/readme", "r");
+    writeText(ROOT + "/sub/c.txt", "c");
+    writeText(ROOT + "/sub/deep/d.txt", "d");
+}
+
+func names(entries: list[Entry]): string {
+    var out: list[string] = [];
+    for (e in entries) {
+        let rel = if (e.rel_dir.len() == 0) { e.name } else { e.rel_dir + "/" + e.name };
+        out.push(if (e.is_dir) { rel + "/" } else { rel });
+    }
+    return out.join(" ");
+}
+
+func test_start_dir(): void {
+    expectEq(start_dir(""), ".", "default");
+    expectEq(start_dir("a\\b\\"), "a/b", "separators");
+    expectEq(start_dir("/"), "/", "root");
+}
+
+func test_select(): void {
+    make_tree();
+    expectEq(names(select_entries(ROOT, "*", false)), "A.TXT b.txt readme sub/ Zed/", "all, NTFS order");
+    expectEq(names(select_entries(ROOT, "*.txt", false)), "A.TXT b.txt", "mask ignores case");
+    expectEq(names(select_entries(ROOT, "*.", false)), "readme sub/ Zed/", "no extension");
+    expectEq(names(select_entries(ROOT, "*.txt", true)), "A.TXT b.txt sub/c.txt sub/deep/d.txt", "/S");
+    expectEq(names(select_entries(ROOT, "*", true)),
+        "A.TXT b.txt readme sub/ Zed/ sub/c.txt sub/deep/ sub/deep/d.txt", "/S: matches, then subdirectories");
+    expectEq(select_entries(ROOT, "*.none", true).len(), 0, "nothing");
+    removeDir(ROOT);
+}
+
+func test_start_errors(): void {
+    make_tree();
+    expectEq(start_error(ROOT), "", "a directory");
+    expectEq(start_error(ROOT + "/b.txt"), "ERROR: The directory name is invalid.", "a file");
+    expectEq(start_error(ROOT + "/nope"), "ERROR: The system cannot find the file specified.", "missing");
+    removeDir(ROOT);
+}
+
+func test_programs(): void {
+    expect(find_program("sh", "."), "on PATH");
+    expect(!find_program("loup-forfiles-no-such-program", "."), "missing");
+    expect(find_program("/bin/sh", "."), "absolute");
+    expectEq(shell_script("loup-forfiles-no-such-program x", "/w"), "", "no script");
+    expectEq(shell_script("cmd /c echo \"a\"", "/w"), "cd -- '/w' || exit 1\nprintf '%s\\n' '\"a\"' ", "cmd /c");
+    expectEq(shell_script("sh -c \"exit 3\"", "/w"), "cd -- '/w' || exit 1\nexec 'sh' '-c' 'exit 3'", "direct");
+    expectEq(MSG_NO_FILES, "ERROR: No files found with the specified search criteria.", "message");
+}

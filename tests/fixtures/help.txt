@@ -1,0 +1,18 @@
+Runs a command for each file or folder that matches a mask.
+
+FORFILES [/P path] [/M mask] [/S] [/C command]
+
+  /P path     Folder to search (default: the current folder).
+  /M mask     Names to select, with * and ? (default: *).
+  /S          Search subfolders too.
+  /C command  Command to run for each match (default:
+              "cmd /c echo @file"). It runs in the match's folder.
+
+Variables in the command:
+  @file @fname @ext   name, name without extension, extension (quoted)
+  @path @relpath      absolute path, path from the start folder (quoted)
+  @isdir @fsize       TRUE or FALSE, size in bytes
+  0xHH                the character with hexadecimal code HH
+
+A command that starts with "cmd /c" is read as a cmd.exe line and run
+by sh; any other command names a program on PATH.

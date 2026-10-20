@@ -1,98 +1,91 @@
 @mode(host.dual)
 
-# Command-line parsing. Loup 1.26 has no CLI library, so arguments are
-# parsed by hand into an Options value.
-#
-# Grammar: [OPTIONS] COMMAND [OPERANDS...]
-#   Options may appear anywhere before `--`; everything after `--` is an
-#   operand. Value options accept `--name VALUE` and `--name=VALUE`.
+# Command-line parsing for forfiles: `/P path`, `/M mask`, `/S`, `/C command`
+# through the shared Windows switch parser (win/switches.loup). Any other
+# argument is an error (forfiles takes no operands), and so is `/D`: file
+# dates are out of reach in Loup 1.26.0 (no stat()).
 
-pub const DEFAULT_GREETING: string = "Hello";
+from win.switches import (SwitchSpec, SwitchArgs, flag, required_value, parse_switches,
+    switch_value, has_switch);
+
+pub const DEFAULT_MASK: string = "*";
+pub const DEFAULT_COMMAND: string = "cmd /c echo @file";
+pub const USAGE_HINT: string = "Type \"FORFILES /?\" for usage.";
 
 pub struct Options {
-    pub command: string;
-    pub operands: list[string];
     pub help: bool;
     pub version: bool;
-    pub verbose: bool;
-    pub shout: bool;
-    pub greeting: string;
+    pub path: string;      # as typed; "" for the current directory
+    pub mask: string;
+    pub recurse: bool;
+    pub command: string;
 }
 
-pub func parse_args(argv: list[string]): Result[Options, string] {
-    var command = "";
-    var operands: list[string] = [];
-    var help = false;
-    var version = false;
-    var verbose = false;
-    var shout = false;
-    var greeting = DEFAULT_GREETING;
-    var only_operands = false;
+# The switches forfiles declares. `/D` is declared so that its value is not
+# taken for a stray argument; it is then refused.
+pub func forfiles_switches(): list[SwitchSpec] {
+    return [required_value("P"), required_value("M"), flag("S"), required_value("C"),
+        required_value("D")];
+}
 
-    var i = 0;
-    while (i < argv.len()) {
-        let arg = argv[i];
-        i += 1;
+# The two lines Windows prints for a command-line error.
+pub func syntax_error(message: string): string {
+    return "ERROR: " + message + "\n" + USAGE_HINT;
+}
 
-        if (only_operands or arg == "-" or !arg.startsWith("-")) {
-            if (command.is_empty()) {
-                command = arg;
-            } else {
-                operands.push(arg);
+pub func invalid_argument(arg: string): string {
+    return syntax_error("Invalid argument/option - '" + arg + "'.");
+}
+
+# The first switch given more than once, as typed, or "".
+func repeated_switch(parsed: SwitchArgs): string {
+    for (i in 0..parsed.switches.len()) {
+        for (j in 0..i) {
+            if (parsed.switches[j].name == parsed.switches[i].name) {
+                return parsed.switches[i].text;
             }
-            continue;
-        }
-        if (arg == "--") {
-            only_operands = true;
-            continue;
-        }
-
-        # Split `--name=value` into its name and inline value.
-        var name = arg;
-        var inline_value: Option[string] = None;
-        if (arg.startsWith("--") and arg.contains("=")) {
-            let parts = arg.split("=");
-            name = parts[0];
-            inline_value = Some(parts.slice(1).join("="));
-        }
-
-        if (name == "-g" or name == "--greeting") {
-            match inline_value {
-                Some(v) => { greeting = v; },
-                None => {
-                    if (i >= argv.len()) {
-                        return Err(i"option '{$ name $}' requires a value");
-                    }
-                    greeting = argv[i];
-                    i += 1;
-                },
-            }
-            continue;
-        }
-
-        if (inline_value.is_some()) {
-            return Err(i"option '{$ name $}' does not take a value");
-        }
-        if (name == "-h" or name == "--help") {
-            help = true;
-        } else if (name == "-V" or name == "--version") {
-            version = true;
-        } else if (name == "-v" or name == "--verbose") {
-            verbose = true;
-        } else if (name == "--shout") {
-            shout = true;
-        } else {
-            return Err(i"unknown option '{$ name $}'");
         }
     }
+    return "";
+}
 
+# Parses argv. An Err holds the complete message for standard error.
+# (Statement-form `match` with a `return` in each arm on purpose: a match
+# expression whose arms build new values returns freed memory natively.)
+pub func parse_args(argv: list[string]): Result[Options, string] {
+    match parse_switches(argv, forfiles_switches()) {
+        Ok(parsed) => {
+            return options_from(parsed);
+        },
+        Err(e) => {
+            return Err(syntax_error("Invalid syntax. Value expected for '" + e.text + "'."));
+        },
+    }
+}
+
+func options_from(parsed: SwitchArgs): Result[Options, string] {
+    if (parsed.help or parsed.version) {
+        return Ok(Options(help = parsed.help, version = parsed.version, path = "",
+            mask = DEFAULT_MASK, recurse = false, command = DEFAULT_COMMAND));
+    }
+    let twice = repeated_switch(parsed);
+    if (twice.len() > 0) {
+        return Err(syntax_error("Invalid syntax. '" + twice + "' option is not allowed more than '1' time(s)."));
+    }
+    for (sw in parsed.switches) {
+        if (sw.name == "D") {
+            return Err(invalid_argument(sw.text));
+        }
+    }
+    if (parsed.operands.len() > 0) {
+        return Err(invalid_argument(parsed.operands[0]));
+    }
     return Ok(Options(
-        command = command,
-        operands = operands,
-        help = help,
-        version = version,
-        verbose = verbose,
-        shout = shout,
-        greeting = greeting,
+        help = false,
+        version = false,
+        path = switch_value(parsed, "P") ?? "",
+        mask = switch_value(parsed, "M") ?? DEFAULT_MASK,
+        recurse = has_switch(parsed, "S"),
+        command = switch_value(parsed, "C") ?? DEFAULT_COMMAND,
     ));
 }
