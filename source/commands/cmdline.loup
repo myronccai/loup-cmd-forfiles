@@ -18,6 +18,14 @@
 # /dev/null; `( ... )` groups; `^` escapes the next character; `"..."`
 # quotes; `%NAME%` is the environment variable if it is set. Every other
 # character is literal: sh never sees `$`, `*` or `'` unescaped.
+#
+# Runtime: host.dual. Compiled into the native binary build/forfiles by `make
+# build`; `make run` interprets the same code with Stage0 (`loup-bootstrap run
+# source/main.loup`).
+#
+# Structure: sh quoting helpers; detecting `cmd /c` and taking its body;
+# translating cmd syntax to sh (cmd_to_sh, with its echo and redirection
+# helpers); and splitting a direct command into arguments.
 
 func chars_of(text: string): list[string] {
     var out: list[string] = [];
@@ -308,6 +316,10 @@ pub func cmd_to_sh(line: string): string {
     let n = cs.len();
     var out: list[string] = [];
     var i = 0;
+    # A one-pass scanner. `at_start` is true where a new command may begin
+    # (the line start, after `&`, `&&`, `|`, `||` or `(`): only there are
+    # `@`, `(` and `echo` special. `depth` counts open `(` groups, so that
+    # `)` closes one only inside a group.
     var at_start = true;
     var depth = 0;
     while (i < n) {

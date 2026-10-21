@@ -1,5 +1,12 @@
 @mode(host.dual)
 
+# Unit tests for the /C template (commands.substitution): `0xHH` escapes,
+# name parts, every @ variable for files and directories, and substitute.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from commands.substitution import (make_entry, expand_hex, name_stem, name_ext, substitute,
     variable_value);

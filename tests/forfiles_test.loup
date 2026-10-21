@@ -1,6 +1,12 @@
 @mode(host.dual)
 
-# select_entries and the start-directory checks, on a tree under build/tmp.
+# Unit tests for commands.forfiles: select_entries and the start-directory
+# checks, on a tree under build/tmp/ (removed by `make clean`), and finding
+# programs and building the sh script.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary.
 
 from debug.assert import (expect, expectEq);
 from io.fs import (createDir, writeText, removeDir, isDir);

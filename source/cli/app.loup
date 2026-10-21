@@ -1,5 +1,12 @@
 @mode(host.dual)
 
+# Top level of forfiles: parse the arguments, handle /? and --version, run
+# the command for each match and turn the outcome into the ERRORLEVEL.
+#
+# Runtime: host.dual. Compiled into the native binary build/forfiles by `make
+# build`; `make run` interprets the same code with Stage0 (`loup-bootstrap run
+# source/main.loup`). The unit tests call run() directly.
+
 from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.args import (parse_args);
 from cli.usage import (usage, version_line);

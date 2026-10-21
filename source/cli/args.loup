@@ -4,6 +4,10 @@
 # through the shared Windows switch parser (win/switches.loup). Any other
 # argument is an error (forfiles takes no operands), and so is `/D`: file
 # dates are out of reach in Loup 1.26.0 (no stat()).
+#
+# Runtime: host.dual. Compiled into the native binary build/forfiles by `make
+# build`; `make run` interprets the same code with Stage0 (`loup-bootstrap run
+# source/main.loup`).
 
 from win.switches import (SwitchSpec, SwitchArgs, flag, required_value, parse_switches,
     switch_value, has_switch);

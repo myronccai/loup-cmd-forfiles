@@ -1,5 +1,13 @@
 @mode(host.dual)
 
+# Unit tests for the command translation (commands.cmdline): sh quoting,
+# `cmd /c` detection, cmd's echo, operators and redirections, %VARIABLES%
+# and Windows-style argument splitting.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from commands.cmdline import (sh_quote, sh_char, is_cmd_line, cmd_body, cmd_to_sh, echo_command,
     split_args, exec_line, expand_env);

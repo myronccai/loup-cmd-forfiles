@@ -1,5 +1,11 @@
 @mode(host.dual)
 
+# The help text of forfiles (`forfiles /?`) and its --version line.
+#
+# Runtime: host.dual. Compiled into the native binary build/forfiles by `make
+# build`; `make run` interprets the same code with Stage0 (`loup-bootstrap run
+# source/main.loup`).
+
 from appinfo import (APP_NAME, APP_VERSION);
 
 # The text of `forfiles /?` (this project's own wording).

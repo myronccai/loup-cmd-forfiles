@@ -1,7 +1,12 @@
 @mode(host.dual)
 
-# Application identity. Keep APP_NAME and APP_VERSION in step with `name`
-# and `version` in package.lppkg.
+# Application identity for forfiles: name, version, summary and the exit
+# statuses. Keep APP_NAME and APP_VERSION in step with `name` and `version`
+# in package.lppkg.
+#
+# Runtime: host.dual. Constants only. Compiled into build/forfiles by `make
+# build`; `make run` interprets the same code with Stage0 (`loup-bootstrap run
+# source/main.loup`).
 
 pub const APP_NAME: string = "forfiles";
 pub const APP_VERSION: string = "0.1.0";

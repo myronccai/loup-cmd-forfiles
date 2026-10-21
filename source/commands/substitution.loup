@@ -16,6 +16,10 @@
 #
 # Names are matched without regard to case (`@FILE`). @path and @relpath use
 # `/`: the values are handed to Linux programs (Windows uses `\`).
+#
+# Runtime: host.dual. Compiled into the native binary build/forfiles by `make
+# build`; `make run` interprets the same code with Stage0 (`loup-bootstrap run
+# source/main.loup`).
 
 from io.fs import (readBytes);
 from win.paths import (join_path);
@@ -148,6 +152,10 @@ pub func variable_value(var_name: string, entry: Entry, start_abs: string): stri
 }
 
 # The command with every @ variable replaced for one entry.
+# One pass over the command: at each `@`, the first variable name that
+# matches (VAR_NAMES order) is replaced and the scan continues after it; the
+# text between replacements is copied in slices. Values are never scanned
+# again, so a file named `@file` stays as it is.
 pub func substitute(command: string, entry: Entry, start_abs: string): string {
     let names = VAR_NAMES.split(" ");
     let lower = command.toLowerCase();

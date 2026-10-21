@@ -5,6 +5,17 @@
 # one with @file, @path, ... replaced (see commands/substitution.loup). The
 # command runs through /bin/sh in the entry's directory; `cmd /c` commands
 # are translated from cmd syntax first (see commands/cmdline.loup).
+#
+# Runtime: host.dual. Compiled into the native binary build/forfiles by `make
+# build`; `make run` interprets the same code with Stage0 (`loup-bootstrap run
+# source/main.loup`). run_forfiles starts each command with execShell, which
+# the self-hosted `loup run` lacks; that is why `make run` uses Stage0.
+#
+# Structure: the start directory and its checks; select_entries, which walks
+# the tree; absolute_dir and find_program, which ask the system; shell_script,
+# which builds the sh script for one command; and run_forfiles, which selects
+# everything first, then substitutes and runs the command for each entry in
+# turn.
 
 from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.args import (Options);
@@ -39,6 +50,9 @@ pub func start_error(dir: string): string {
 # The entries under `start` whose names match `mask`, files and directories
 # alike, in forfiles order: a directory's own matches (NTFS name order),
 # then, with `recurse`, each subdirectory in name order, depth first.
+# The walk keeps an explicit stack of directories (relative to `start`)
+# and their depths; subdirectories are pushed in reverse so that they pop in
+# name order.
 pub func select_entries(start: string, mask: string, recurse: bool): list[Entry] {
     var out: list[Entry] = [];
     var stack: list[string] = [""];
