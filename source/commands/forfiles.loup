@@ -50,27 +50,22 @@ pub func start_error(dir: string): string {
 # The entries under `start` whose names match `mask`, files and directories
 # alike, in forfiles order: a directory's own matches (NTFS name order),
 # then, with `recurse`, each subdirectory in name order, depth first.
-# The walk keeps an explicit stack of directories (relative to `start`)
-# and their depths; subdirectories are pushed in reverse so that they pop in
+# The walk keeps an explicit stack of (directory relative to `start`,
+# depth) pairs; subdirectories are pushed in reverse so that they pop in
 # name order.
 pub func select_entries(start: string, mask: string, recurse: bool): list[Entry] {
     var out: list[Entry] = [];
-    var stack: list[string] = [""];
-    var depths: list[int] = [0];
+    var stack: list[(string, int)] = [("", 0)];
     while (stack.len() > 0) {
-        let rel = stack.pop();
-        let depth = depths.pop();
+        let (rel, depth) = stack.pop();
         let full = if (rel.len() == 0) { start } else { join_path(start, rel) };
         for (name in list_matches(full, mask, MATCH_ALL)) {
             out.push(make_entry(rel, name, isDir(join_path(full, name))));
         }
         if (recurse and depth < MAX_DEPTH) {
             let subs = subdirectories(full);
-            var k = subs.len() - 1;
-            while (k >= 0) {
-                stack.push(join_path(rel, subs[k]));
-                depths.push(depth + 1);
-                k -= 1;
+            for (var k = subs.len() - 1; k >= 0; k -= 1) {
+                stack.push((join_path(rel, subs[k]), depth + 1));
             }
         }
     }

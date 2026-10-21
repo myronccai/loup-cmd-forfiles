@@ -153,9 +153,9 @@ pub func variable_value(var_name: string, entry: Entry, start_abs: string): stri
 
 # The command with every @ variable replaced for one entry.
 # One pass over the command: at each `@`, the first variable name that
-# matches (VAR_NAMES order) is replaced and the scan continues after it; the
-# text between replacements is copied in slices. Values are never scanned
-# again, so a file named `@file` stays as it is.
+# matches (VAR_NAMES order) is replaced and the scan goes on after it
+# (`continue scan`); the text between replacements is copied in slices.
+# Values are never scanned again, so a file named `@file` stays as it is.
 pub func substitute(command: string, entry: Entry, start_abs: string): string {
     let names = VAR_NAMES.split(" ");
     let lower = command.toLowerCase();
@@ -163,26 +163,20 @@ pub func substitute(command: string, entry: Entry, start_abs: string): string {
     var out: list[string] = [];
     var plain = 0;   # start of the text not yet copied
     var i = 0;
-    while (i < n) {
-        if (command.slice(i, i + 1) != "@") {
-            i += 1;
-            continue;
-        }
-        var found = "";
-        for (name in names) {
-            let end = i + 1 + name.len();
-            if (found.len() == 0 and end <= n and lower.slice(i + 1, end) == name) {
-                found = name;
+    scan: while (i < n) {
+        if (command.slice(i, i + 1) == "@") {
+            for (name in names) {
+                let end = i + 1 + name.len();
+                if (end <= n and lower.slice(i + 1, end) == name) {
+                    out.push(command.slice(plain, i));
+                    out.push(variable_value(name, entry, start_abs));
+                    i = end;
+                    plain = i;
+                    continue scan;
+                }
             }
         }
-        if (found.len() == 0) {
-            i += 1;
-            continue;
-        }
-        out.push(command.slice(plain, i));
-        out.push(variable_value(found, entry, start_abs));
-        i += 1 + found.len();
-        plain = i;
+        i += 1;
     }
     out.push(command.slice(plain, n));
     return out.join("");

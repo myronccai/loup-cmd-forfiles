@@ -53,4 +53,7 @@ func test_substitute(): void {
     expectEq(substitute("@FNAME.@Ext @isdir", e, "/w"), "\"a\".\"txt\" FALSE", "any case");
     expectEq(substitute("mail@x @ @fdate @files", e, "/w"), "mail@x @ @fdate \"a.txt\"s", "others left alone");
     expectEq(substitute("@relpath@path", e, "/w"), "\"./a.txt\"\"/w/a.txt\"", "adjacent");
+    expectEq(substitute("x @", e, "/w"), "x @", "an @ at the end");
+    let odd = make_entry("", "@file", false);
+    expectEq(substitute("echo @file", odd, "/w"), "echo \"@file\"", "a value is not scanned again");
 }
